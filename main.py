@@ -53,15 +53,20 @@ def main():
         print("Did you download 'hand_landmarker.task'? Download it from MediaPipe website.")
         sys.exit(1)
 
-    writer = AsyncWriter(args.output_dir)
+    if source is not JpegFileSource:
+        writer = AsyncWriter(args.output_dir)
     
     print("Starting Pipeline...")
-    print("Press 'q' to quit.")
+    print("Controls:")
+    print("  'q'     : Quit")
+    print("  's'     : Single Step / Pause")
+    print("  'space' : Toggle Pause/Play")
 
     # 2. Main Loop
     fps_start_time = time.time()
     fps_counter = 0
     fps = 0
+    paused = False
 
     try:
         # source.frames() yields (index, frame)
@@ -79,19 +84,32 @@ def main():
                 fps_counter = 0
                 fps_start_time = time.time()
 
+            # --- Output: Save ---
+            # Save every frame to debug mediapipe results as requested
+            # Use async writer to not block
+            writer.write(processed_frame)
             cv2.putText(processed_frame, f"FPS: {fps:.1f} | Proc: {proc_time*1000:.1f}ms", (10, 30), 
                         cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 255, 0), 2)
 
             # --- Output: Display ---
             if not args.no_display:
                 cv2.imshow("Pianist Debugger", processed_frame)
-                if cv2.waitKey(1) & 0xFF == ord('q'):
+                
+                # Wait interaction
+                # If paused, wait indefinitely (0) until key press
+                # If running, wait 1ms
+                wait_time = 0 if paused else 1
+                key = cv2.waitKey(wait_time) & 0xFF
+                
+                if key == ord('q'):
                     break
+                elif key == ord('s'):
+                    # specific request: 's' for single step (implies pause)
+                    paused = True
+                elif key == ord(' '):
+                    # standard space to toggle
+                    paused = not paused
 
-            # --- Output: Save ---
-            # Save every frame to debug mediapipe results as requested
-            # Use async writer to not block
-            writer.write(processed_frame)
 
     except KeyboardInterrupt:
         print("\nInterrupted manually.")
