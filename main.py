@@ -1,167 +1,103 @@
 import cv2
-import mediapipe as mp
-import mediapipe.tasks as mp_tasks
-from mediapipe.tasks.python import vision
+import argparse
+import sys
+import os
 import time
-from dataclasses import dataclass
-from typing import List, Dict, Tuple
 
-# --- Configuration & Constants ---
-# MediaPipe Landmark Indices
-# Thumb: 4, Index: 8, Middle: 12, Ring: 16, Pinky: 20
-# Knuckles (MCP): Thumb: 2, Index: 5, Middle: 9, Ring: 13, Pinky: 17
-FINGER_TIPS = [4, 8, 12, 16, 20]
-FINGER_MCP = [2, 5, 9, 13, 17] # Knuckles (Metacarpophalangeal joints)
-FINGER_NAMES = ["Thumb", "Index", "Middle", "Ring", "Pinky"]
+# Adjust path to find modules
+sys.path.append(os.path.dirname(os.path.abspath(__file__)))
 
-@dataclass
-class KeyPressEvent:
-    finger_name: str
-    start_time: float
-    duration: float
+from sources.camera import LiveCameraSource
+from sources.video_file import VideoFileSource
+from sources.jpeg_source import JpegFileSource
+from detector.hand_detector import HandProcessor
+from extractor.async_writer import AsyncWriter
 
-class FingerState:
-    """
-    Tracks the state of a single finger to calculate duration.
-    State Machine: IDLE -> PRESSED -> RELEASED -> IDLE
-    """
-    def __init__(self, name: str):
-        self.name = name
-        self.is_pressed = False
-        self.press_start_time = 0.0
-        
-    def update(self, pressed_now: bool) -> KeyPressEvent:
-        event = None
-        
-        if pressed_now and not self.is_pressed:
-            # Transition: IDLE -> PRESSED
-            self.is_pressed = True
-            self.press_start_time = time.time()
-            # print(f"[{self.name}] Down") # Debug logging
-            
-        elif not pressed_now and self.is_pressed:
-            # Transition: PRESSED -> RELEASED
-            self.is_pressed = False
-            duration = time.time() - self.press_start_time
-            event = KeyPressEvent(self.name, self.press_start_time, duration)
-            print(f"[{self.name}] Released. Duration: {duration:.2f}s")
-            
-        return event
+def get_source(args):
+    """Factory to create the appropriate video source."""
+    if args.input_type == 'camera':
+        return LiveCameraSource(int(args.input_path)) # Using input_path as index
+    elif args.input_type == 'video':
+        if not os.path.exists(args.input_path):
+            print(f"Error: Video file not found: {args.input_path}")
+            sys.exit(1)
+        return VideoFileSource(args.input_path)
+    elif args.input_type == 'jpeg':
+        if not os.path.isdir(args.input_path):
+            print(f"Error: Directory not found: {args.input_path}")
+            sys.exit(1)
+        return JpegFileSource(args.input_path)
+    else:
+        print(f"Unknown input type: {args.input_type}")
+        sys.exit(1)
 
-class HandProcessor:
-    def __init__(self):
-        # Initialize MediaPipe Tasks HandLandmarker with GPU delegate
-        base_options = mp_tasks.BaseOptions(
-            model_asset_path='hand_landmarker.task',
-            delegate=mp_tasks.BaseOptions.Delegate.GPU
-        )
-        options = vision.HandLandmarkerOptions(
-            base_options=base_options,
-            running_mode=vision.RunningMode.VIDEO,
-            num_hands=1,
-            min_hand_detection_confidence=0.7,
-            min_hand_presence_confidence=0.5,
-            min_tracking_confidence=0.5
-        )
-        self.landmarker = vision.HandLandmarker.create_from_options(options)
-        
-        # Initialize state trackers for 5 fingers
-        self.finger_states = [FingerState(name) for name in FINGER_NAMES]
-
-    def process(self, frame):
-        # MediaPipe Tasks requires mp.Image
-        img_rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
-        mp_image = mp.Image(image_format=mp.ImageFormat.SRGB, data=img_rgb)
-        
-        # Timestamp in ms (must be increasing)
-        timestamp_ms = int(time.time() * 1000)
-        
-        result = self.landmarker.detect_for_video(mp_image, timestamp_ms)
-        
-        events = []
-        
-        if result.hand_landmarks:
-            for hand_lms in result.hand_landmarks:
-                # 1. Draw the skeleton
-                self._draw_skeleton(frame, hand_lms)
-                
-                # 2. Analyze geometric logic
-                events.extend(self._detect_presses(hand_lms, frame))
-                
-        return frame, events
-
-    def _draw_skeleton(self, frame, landmarks):
-        h, w, _ = frame.shape
-        # Draw connections
-        for start_idx, end_idx in mp.solutions.hands.HAND_CONNECTIONS:
-            start = landmarks[start_idx]
-            end = landmarks[end_idx]
-            cv2.line(frame, 
-                     (int(start.x * w), int(start.y * h)), 
-                     (int(end.x * w), int(end.y * h)), 
-                     (255, 255, 255), 2)
-        
-        # Draw points
-        for lm in landmarks:
-             cx, cy = int(lm.x * w), int(lm.y * h)
-             cv2.circle(frame, (cx, cy), 5, (0, 0, 255), cv2.FILLED)
-
-    def _detect_presses(self, landmarks, frame) -> List[KeyPressEvent]:
-        h, w, _ = frame.shape
-        events_batch = []
-
-        for i in range(5):
-            tip_idx = FINGER_TIPS[i]
-            mcp_idx = FINGER_MCP[i] # Knuckle
-            
-            # Note: landmarks is now a list of NormalizedLandmark objects
-            tip_y = landmarks[tip_idx].y
-            mcp_y = landmarks[mcp_idx].y
-            
-            # Simple Heuristic: If Tip Y > Knuckle Y (plus offset), it's curled/pressed.
-            is_down = tip_y > (mcp_y + 0.02)
-            
-            # Update State Machine
-            event = self.finger_states[i].update(is_down)
-            if event:
-                events_batch.append(event)
-                
-            # Visual Feedback on frame
-            color = (0, 255, 0) if is_down else (0, 0, 255)
-            # Convert normalized to pixel coords for drawing
-            cx, cy = int(landmarks[tip_idx].x * w), int(landmarks[tip_idx].y * h)
-            cv2.circle(frame, (cx, cy), 10, color, cv2.FILLED)
-
-        return events_batch
-
-# --- Main Loop (The "System" part) ---
 def main():
-    cap = cv2.VideoCapture(0)
-    processor = HandProcessor()
+    parser = argparse.ArgumentParser(description="Pianist: Realtime Hand Tracking & Extraction Debugger")
+    parser.add_argument('--input_type', choices=['camera', 'video', 'jpeg'], required=True, help='Type of input')
+    parser.add_argument('--input_path', required=True, help='Path to file/dir or camera index (e.g., 0)')
+    parser.add_argument('--model', default='hand_landmarker.task', help='Path to MediaPipe task model')
+    parser.add_argument('--output_dir', default='output_frames', help='Directory to save processed frames (if extract is on)')
+    parser.add_argument('--no_display', action='store_true', help='Disable window display (headless mode)')
     
-    print("Starting Piano Tracker (GPU Accelerated)... Press 'q' to quit.")
+    args = parser.parse_args()
+
+    # 1. Setup Resources
+    print(f"Initializing Source: {args.input_type} -> {args.input_path}")
+    source = get_source(args)
     
+    print(f"Initializing Detector with model: {args.model}")
     try:
-        while cap.isOpened():
-            success, frame = cap.read()
-            if not success: break
+        processor = HandProcessor(model_path=args.model)
+    except Exception as e:
+        print(f"Failed to load detector: {e}")
+        print("Did you download 'hand_landmarker.task'? Download it from MediaPipe website.")
+        sys.exit(1)
+
+    writer = AsyncWriter(args.output_dir)
+    
+    print("Starting Pipeline...")
+    print("Press 'q' to quit.")
+
+    # 2. Main Loop
+    fps_start_time = time.time()
+    fps_counter = 0
+    fps = 0
+
+    try:
+        # source.frames() yields (index, frame)
+        for frame_idx, frame in source.frames():
             
-            # Process Frame
-            frame, events = processor.process(frame)
-            
-            # (Optional) Handle events - e.g., send to cloud/log
-            if events:
-                for e in events:
-                    # Overlay text for released events
-                    cv2.putText(frame, f"{e.finger_name}: {e.duration:.2f}s", (10, 50), 
-                                cv2.FONT_HERSHEY_SIMPLEX, 1, (255, 255, 0), 2)
-            
-            cv2.imshow("Piano Tracker", frame)
-            
-            if cv2.waitKey(1) & 0xFF == ord('q'):
-                break
+            # --- Inference ---
+            start_proc = time.time()
+            processed_frame, events = processor.process(frame)
+            proc_time = time.time() - start_proc
+
+            # --- Visualization Info ---
+            fps_counter += 1
+            if time.time() - fps_start_time > 1.0:
+                fps = fps_counter / (time.time() - fps_start_time)
+                fps_counter = 0
+                fps_start_time = time.time()
+
+            cv2.putText(processed_frame, f"FPS: {fps:.1f} | Proc: {proc_time*1000:.1f}ms", (10, 30), 
+                        cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 255, 0), 2)
+
+            # --- Output: Display ---
+            if not args.no_display:
+                cv2.imshow("Pianist Debugger", processed_frame)
+                if cv2.waitKey(1) & 0xFF == ord('q'):
+                    break
+
+            # --- Output: Save ---
+            # Save every frame to debug mediapipe results as requested
+            # Use async writer to not block
+            writer.write(processed_frame)
+
+    except KeyboardInterrupt:
+        print("\nInterrupted manually.")
     finally:
-        cap.release()
+        print("Cleaning up...")
+        writer.stop()
         cv2.destroyAllWindows()
 
 if __name__ == "__main__":
