@@ -17,7 +17,8 @@ class JpegFileSource(VideoSource):
                 continue  # Skip unreadable files
             yield idx, frame
 
-    def get_resolution(self):
+    @property
+    def resolution(self):
         for file_path in self.image_files:
             frame = cv2.imread(file_path)
             if frame is not None:
@@ -25,5 +26,6 @@ class JpegFileSource(VideoSource):
                 return width, height
         raise ValueError("No readable images found to determine resolution.")
     
-    def get_fps(self):
+    @property
+    def fps(self):
         return 30.0

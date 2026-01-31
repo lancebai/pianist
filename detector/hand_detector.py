@@ -39,15 +39,15 @@ class KeyPressEvent:
     start_time: float
     duration: float
 
+@dataclass
 class FingerState:
     """
     Tracks the state of a single finger to calculate duration.
     State Machine: IDLE -> PRESSED -> RELEASED -> IDLE
     """
-    def __init__(self, name: str):
-        self.name = name
-        self.is_pressed = False
-        self.press_start_time = 0.0
+    name: str
+    is_pressed: bool = False
+    press_start_time: float = 0.0
         
     def update(self, pressed_now: bool) -> KeyPressEvent:
         event = None

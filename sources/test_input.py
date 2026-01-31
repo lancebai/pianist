@@ -60,5 +60,10 @@ class TestInputSource(VideoSource):
 
             yield frame_idx, frame
 
-    def get_resolution(self):        
+    @property
+    def resolution(self):        
         return 1920, 1080
+
+    @property
+    def fps(self):
+        return 30.0

@@ -12,7 +12,7 @@ class JetsonCameraSource(VideoSource):
         )
 
         self.cap = cv2.VideoCapture(self.gst_pipeline, cv2.CAP_GSTREAMER)
-        self.fps = framerate
+        self._fps = framerate
         if not self.cap.isOpened():
             raise RuntimeError("Failed to open Jetson camera with GStreamer pipeline")
 
@@ -26,10 +26,12 @@ class JetsonCameraSource(VideoSource):
             frame_idx += 1
         self.cap.release()
 
-    def get_resolution(self):
+    @property
+    def resolution(self):
         width = int(self.cap.get(cv2.CAP_PROP_FRAME_WIDTH))
         height = int(self.cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
         return width, height
 
-    def get_fps(self):
-        return self.fps
+    @property
+    def fps(self):
+        return self._fps

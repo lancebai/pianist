@@ -8,15 +8,17 @@ class VideoSource(ABC):
         """
         pass
 
+    @property
     @abstractmethod
-    def get_resolution(self):
+    def resolution(self):
         """
         Returns (width, height) of the video.
         """
         pass
 
+    @property
     @abstractmethod
-    def get_fps(self):
+    def fps(self):
         """
         Returns the frame rate (fps) of the video source, or None if unavailable.
         """

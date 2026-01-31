@@ -15,11 +15,13 @@ class VideoFileSource(VideoSource):
             frame_idx += 1
         self.cap.release()
 
-    def get_resolution(self):
+    @property
+    def resolution(self):
         width = int(self.cap.get(cv2.CAP_PROP_FRAME_WIDTH))
         height = int(self.cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
         return width, height
     
-    def get_fps(self):
+    @property
+    def fps(self):
         fps = self.cap.get(cv2.CAP_PROP_FPS)
         return fps
