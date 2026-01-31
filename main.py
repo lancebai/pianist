@@ -38,6 +38,7 @@ def main():
     parser.add_argument('--model', default='hand_landmarker.task', help='Path to MediaPipe task model')
     parser.add_argument('--output_dir', default='output_frames', help='Directory to save processed frames (if extract is on)')
     parser.add_argument('--no_display', action='store_true', help='Disable window display (headless mode)')
+    parser.add_argument('--log_data', action='store_true', help='Enable logging of landmarks to CSV for training')
     
     args = parser.parse_args()
 
@@ -46,14 +47,16 @@ def main():
     source = get_source(args)
     
     print(f"Initializing Detector with model: {args.model}")
+    processor = None
+    writer = None
     try:
-        processor = HandProcessor(model_path=args.model)
+        processor = HandProcessor(model_path=args.model, log_data=args.log_data)
     except Exception as e:
         print(f"Failed to load detector: {e}")
         print("Did you download 'hand_landmarker.task'? Download it from MediaPipe website.")
         sys.exit(1)
 
-    if source is not JpegFileSource:
+    if not isinstance(source, JpegFileSource):
         writer = AsyncWriter(args.output_dir)
     
     print("Starting Pipeline...")
@@ -87,7 +90,9 @@ def main():
             # --- Output: Save ---
             # Save every frame to debug mediapipe results as requested
             # Use async writer to not block
-            writer.write(processed_frame)
+            if writer is not None:
+                writer.write(processed_frame)
+
             cv2.putText(processed_frame, f"FPS: {fps:.1f} | Proc: {proc_time*1000:.1f}ms", (10, 30), 
                         cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 255, 0), 2)
 
@@ -115,7 +120,10 @@ def main():
         print("\nInterrupted manually.")
     finally:
         print("Cleaning up...")
-        writer.stop()
+        if not isinstance(source, JpegFileSource) and 'writer' in locals():
+            writer.stop()
+        if processor:
+            processor.close()
         cv2.destroyAllWindows()
 
 if __name__ == "__main__":

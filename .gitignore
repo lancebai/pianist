@@ -3,3 +3,4 @@ __pycache__/
 *.task
 .DS_Store
 output_frames/
+training_data/

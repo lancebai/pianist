@@ -6,6 +6,11 @@ import time
 from dataclasses import dataclass
 from typing import List, Dict, Tuple
 import platform
+import csv
+import os
+from datetime import datetime
+
+from abc import ABC, abstractmethod
 
 # --- Configuration & Constants ---
 # MediaPipe Landmark Indices
@@ -14,6 +19,7 @@ import platform
 FINGER_TIPS = [4, 8, 12, 16, 20]
 FINGER_MCP = [2, 5, 9, 13, 17] # Knuckles (Metacarpophalangeal joints)
 FINGER_NAMES = ["Thumb", "Index", "Middle", "Ring", "Pinky"]
+
 def get_device_delegate():
     os_name = platform.system()
     
@@ -61,8 +67,110 @@ class FingerState:
             
         return event
 
+class AbstractFingerDetector(ABC):
+    @abstractmethod
+    def detect(self, landmarks, frame_shape) -> List[bool]:
+        """
+        Determines if each of the 5 fingers is pressed.
+        Returns a list of 5 booleans [Thumb, Index, Middle, Ring, Pinky].
+        """
+        pass
+
+class HeuristicFingerDetector(AbstractFingerDetector):
+    def detect(self, landmarks, frame_shape) -> List[bool]:
+        is_pressed_list = []
+        for i in range(5):
+            tip_idx = FINGER_TIPS[i]
+            mcp_idx = FINGER_MCP[i]
+            
+            # Note: landmarks is now a list of NormalizedLandmark objects
+            tip_y = landmarks[tip_idx].y
+            mcp_y = landmarks[mcp_idx].y
+            
+            # Simple Heuristic: If Tip Y > Knuckle Y (plus offset), it's curled/pressed.
+            is_down = tip_y > (mcp_y + 0.02)
+            is_pressed_list.append(is_down)
+        return is_pressed_list
+
+class TrainedFingerDetector(AbstractFingerDetector):
+    def __init__(self, model_path: str = None):
+        self.model_path = model_path
+        # TODO: Load the trained model (e.g., sklearn pickle, onnx, pytorch)
+        if model_path:
+            print(f"Loading trained finger detection model from: {model_path}")
+            # self.model = load_model(model_path)
+        else:
+            print("Warning: No model path provided for TrainedFingerDetector.")
+
+    def detect(self, landmarks, frame_shape) -> List[bool]:
+        if not self.model_path:
+            return [False] * 5
+
+        # TODO: Implement feature extraction
+        # features = self._extract_features(landmarks)
+        
+        # TODO: Run inference
+        # predictions = self.model.predict(features)
+        
+        # Placeholder: Return all False for now
+        return [False] * 5
+
+    def _extract_features(self, landmarks):
+        # Implement feature extraction logic matching the training phase
+        pass
+
+class LandmarkLogger:
+    def __init__(self, output_dir="training_data"):
+        self.output_dir = output_dir
+        os.makedirs(output_dir, exist_ok=True)
+        
+        # Create unique filename based on timestamp
+        timestamp_str = datetime.now().strftime("%Y%m%d_%H%M%S")
+        self.filepath = os.path.join(output_dir, f"landmarks_{timestamp_str}.csv")
+        
+        self.file = open(self.filepath, 'w', newline='')
+        self.writer = csv.writer(self.file)
+        
+        # Write Header
+        # timestamp, [x0, y0, z0, ...], [Thumb_tip_y, Thumb_mcp_y, ...], [Thumb_pressed, ...]
+        header = ["timestamp_ms"]
+        for i in range(21):
+            header.extend([f"lm_{i}_x", f"lm_{i}_y", f"lm_{i}_z"])
+            
+        # Add specific features for easy analysis
+        for name in FINGER_NAMES:
+            header.extend([f"{name}_tip_y", f"{name}_mcp_y"])
+            
+        for name in FINGER_NAMES:
+            header.append(f"{name}_pressed")
+            
+        self.writer.writerow(header)
+        print(f"Logging training data to: {self.filepath}")
+
+    def log(self, timestamp_ms, landmarks, pressed_states):
+        row = [timestamp_ms]
+        
+        # Add all landmarks
+        for lm in landmarks:
+            row.extend([lm.x, lm.y, lm.z])
+            
+        # Add specific tip and mcp y values
+        for i in range(5):
+            tip_idx = FINGER_TIPS[i]
+            mcp_idx = FINGER_MCP[i]
+            row.extend([landmarks[tip_idx].y, landmarks[mcp_idx].y])
+            
+        # Add pressed/not pressed labels (0 or 1)
+        row.extend([1 if p else 0 for p in pressed_states])
+        
+        self.writer.writerow(row)
+
+    def close(self):
+        if self.file:
+            self.file.close()
+
 class HandProcessor:
-    def __init__(self, model_path='hand_landmarker.task'):
+    def __init__(self, model_path='hand_landmarker.task', detector: AbstractFingerDetector = None, log_data: bool = False):
         # Initialize MediaPipe Tasks HandLandmarker with GPU delegate
         try:
             with open(model_path, 'r'): pass
@@ -87,6 +195,12 @@ class HandProcessor:
         
         # Initialize state trackers for 5 fingers
         self.finger_states = [FingerState(name) for name in FINGER_NAMES]
+        
+        # Set detector strategy
+        self.detector = detector if detector else HeuristicFingerDetector()
+        
+        # Initialize Logger
+        self.logger = LandmarkLogger() if log_data else None
 
     def process(self, frame):
         # MediaPipe Tasks requires mp.Image
@@ -106,9 +220,33 @@ class HandProcessor:
                 self._draw_skeleton(frame, hand_lms)
                 
                 # 2. Analyze geometric logic
-                events.extend(self._detect_presses(hand_lms, frame))
+                # Get detection results from the strategy
+                pressed_states = self.detector.detect(hand_lms, frame.shape)
+                
+                # Log data for training
+                if self.logger:
+                    self.logger.log(timestamp_ms, hand_lms, pressed_states)
+                
+                # Update state machines and visualize
+                h, w, _ = frame.shape
+                for i, is_down in enumerate(pressed_states):
+                    # Update State Machine
+                    event = self.finger_states[i].update(is_down)
+                    if event:
+                        events.append(event)
+                        
+                    # Visual Feedback on frame
+                    color = (0, 255, 0) if is_down else (0, 0, 255)
+                    # Convert normalized to pixel coords for drawing
+                    tip_idx = FINGER_TIPS[i]
+                    cx, cy = int(hand_lms[tip_idx].x * w), int(hand_lms[tip_idx].y * h)
+                    cv2.circle(frame, (cx, cy), 10, color, cv2.FILLED)
                 
         return frame, events
+
+    def close(self):
+        if self.logger:
+            self.logger.close()
 
     def _draw_skeleton(self, frame, landmarks):
         h, w, _ = frame.shape
@@ -126,30 +264,3 @@ class HandProcessor:
              cx, cy = int(lm.x * w), int(lm.y * h)
              cv2.circle(frame, (cx, cy), 5, (0, 0, 255), cv2.FILLED)
 
-    def _detect_presses(self, landmarks, frame) -> List[KeyPressEvent]:
-        h, w, _ = frame.shape
-        events_batch = []
-
-        for i in range(5):
-            tip_idx = FINGER_TIPS[i]
-            mcp_idx = FINGER_MCP[i] # Knuckle
-            
-            # Note: landmarks is now a list of NormalizedLandmark objects
-            tip_y = landmarks[tip_idx].y
-            mcp_y = landmarks[mcp_idx].y
-            
-            # Simple Heuristic: If Tip Y > Knuckle Y (plus offset), it's curled/pressed.
-            is_down = tip_y > (mcp_y + 0.02)
-            
-            # Update State Machine
-            event = self.finger_states[i].update(is_down)
-            if event:
-                events_batch.append(event)
-                
-            # Visual Feedback on frame
-            color = (0, 255, 0) if is_down else (0, 0, 255)
-            # Convert normalized to pixel coords for drawing
-            cx, cy = int(landmarks[tip_idx].x * w), int(landmarks[tip_idx].y * h)
-            cv2.circle(frame, (cx, cy), 10, color, cv2.FILLED)
-
-        return events_batch
