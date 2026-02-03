@@ -1,0 +1,32 @@
+[Unit]
+Description=Pianist Hand Detection Service
+After=network.target docker.service
+Requires=docker.service
+
+[Service]
+# Restart infinitely if it crashes
+Restart=always
+RestartSec=10
+
+# Run via Docker
+# --rm: Clean up container on exit
+# --runtime nvidia: REQUIRED for Jetson GPU access
+# --device: Pass through the camera
+# --network host: Expose port 5000 easily
+# -v: Volume mount for logs or training data if needed
+ExecStart=/usr/bin/docker run --rm \
+    --runtime nvidia \
+    --device /dev/video0 \
+    --network host \
+    --name pianist_app \
+    pianist:latest
+
+# Stop container gracefully
+ExecStop=/usr/bin/docker stop pianist_app
+
+# Logging directly to journald
+StandardOutput=journal
+StandardError=journal
+
+[Install]
+WantedBy=multi-user.target

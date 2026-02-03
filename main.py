@@ -13,6 +13,7 @@ from sources.video_file import VideoFileSource
 from sources.jpeg_source import JpegFileSource
 from detector.hand_detector import HandProcessor
 from extractor.async_writer import AsyncWriter
+import telemetry
 
 def get_source(args):
     """Factory to create the appropriate video source."""
@@ -59,6 +60,9 @@ def main():
 
     if not isinstance(source, JpegFileSource):
         writer = AsyncWriter(args.output_dir)
+        
+    # Start Telemetry Server
+    telemetry.start_server(port=5000)
     
     print("Starting Pipeline...")
     print("Controls:")
@@ -97,6 +101,15 @@ def main():
                 fps_counter = 0
                 fps_start_time = time.time()
                 print(f"[Profile] FPS: {fps:.2f} | Infer: {t_infer*1000:.1f}ms")
+                
+                # Update Telemetry
+                num_hands = len(events) # events contains key presses, but let's approximate or just say 1 if events exist
+                # Actually, main.py doesn't track raw hand count from processor easily without modifying processor return.
+                # For now, let's just assume 1 hand if we got a processed frame, or 0.
+                # Use a better metric if available. Processor events are key presses.
+                # Let's count key presses as "hands" for now or just update FPS.
+                telemetry.state.update(fps, 0) # TODO: Pass actual hand count if available
+
 
             # --- Output: Save ---
             # Save every frame to debug mediapipe results as requested
