@@ -1,4 +1,5 @@
 import cv2
+import numpy as np
 import argparse
 import sys
 import os
@@ -74,29 +75,42 @@ def main():
     try:
         # source.frames() yields (index, frame)
         for frame_idx, frame in source.frames():
+            if frame is None:
+                # display_frame = np.zeros((1080, 1920, 3), dtype=np.uint8)
+                # cv2.putText(display_frame, "Reconnecting...", (50, 360), cv2.FONT_HERSHEY_SIMPLEX, 1.0, (0, 0, 255), 2)
+                # cv2.imshow("Pianist", display_frame)
+                # cv2.waitKey(1)
+                print("source disconnected, attempting to reconnect...")
+                continue
+            t_start = time.time()
             
             # --- Inference ---
-            start_proc = time.time()
+            t_infer_start = time.time()
             processed_frame, events = processor.process(frame)
-            proc_time = time.time() - start_proc
+            t_infer = time.time() - t_infer_start
 
             # --- Visualization Info ---
             fps_counter += 1
             if time.time() - fps_start_time > 1.0:
-                fps = fps_counter / (time.time() - fps_start_time)
+                duration = time.time() - fps_start_time
+                fps = fps_counter / duration
                 fps_counter = 0
                 fps_start_time = time.time()
+                print(f"[Profile] FPS: {fps:.2f} | Infer: {t_infer*1000:.1f}ms")
 
             # --- Output: Save ---
             # Save every frame to debug mediapipe results as requested
             # Use async writer to not block
+            t_write_start = time.time()
             if writer is not None:
                 writer.write(processed_frame)
+            t_write = time.time() - t_write_start
 
-            cv2.putText(processed_frame, f"FPS: {fps:.1f} | Proc: {proc_time*1000:.1f}ms", (10, 30), 
+            cv2.putText(processed_frame, f"FPS: {fps:.1f} | Infer: {t_infer*1000:.1f}ms", (10, 30), 
                         cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 255, 0), 2)
 
             # --- Output: Display ---
+            t_display_start = time.time()
             if not args.no_display:
                 cv2.imshow("Pianist Debugger", processed_frame)
                 
@@ -114,6 +128,12 @@ def main():
                 elif key == ord(' '):
                     # standard space to toggle
                     paused = not paused
+            t_display = time.time() - t_display_start
+            
+            # Print detailed warnings if slow
+            total_loop = time.time() - t_start
+            if total_loop > 0.1: # If taking > 100ms ( < 10 FPS )
+                print(f"[Slow Frame] Total: {total_loop*1000:.1f}ms | Infer: {t_infer*1000:.1f}ms | Write: {t_write*1000:.1f}ms | Display: {t_display*1000:.1f}ms")
 
 
     except KeyboardInterrupt:
