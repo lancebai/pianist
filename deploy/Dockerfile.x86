@@ -1,0 +1,47 @@
+# Base image for x86_64 machines with NVIDIA GPU (Standard Linux Laptop/Desktop)
+# Contains CUDA 11.8+ and cuDNN
+FROM nvidia/cuda:11.8.0-cudnn8-runtime-ubuntu22.04
+
+# 1. Install System Dependencies
+# - python3, pip
+# - libgl1, libglib2.0-0: Required for OpenCV (cv2)
+# - libgstreamer*: Video pipeline support
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    python3 \
+    python3-pip \
+    python3-dev \
+    libgl1 \
+    libglib2.0-0 \
+    libgstreamer1.0-0 \
+    gstreamer1.0-plugins-base \
+    gstreamer1.0-plugins-good \
+    gstreamer1.0-plugins-bad \
+    gstreamer1.0-plugins-ugly \
+    libgstreamer-plugins-base1.0-dev \
+    v4l-utils \
+    && rm -rf /var/lib/apt/lists/*
+
+# Fix for "python" command not found (symlink python3 -> python)
+RUN ln -s /usr/bin/python3 /usr/bin/python
+
+# 2. Setup Working Directory
+WORKDIR /app
+
+# 3. Install Python Requirements
+# For x86, we CAN install opencv-python via pip. 
+# Also need TensorFlow for MediaPipe GPU delegation to work best, 
+# though MediaPipe package bundles its own tflite runtime.
+COPY deploy/requirements.txt .
+RUN pip3 install --no-cache-dir -r requirements.txt && \
+    pip3 install --no-cache-dir opencv-python
+
+# 4. Copy Application Code
+COPY . .
+
+# 5. Runtime Configuration
+EXPOSE 5000
+
+# 6. Entrypoint
+# Requires 'nvidia-container-toolkit' on the host to be installed.
+# Run with: docker run --gpus all ...
+CMD ["python3", "main.py", "--input_type", "camera", "--input_path", "0", "--no_display"]
